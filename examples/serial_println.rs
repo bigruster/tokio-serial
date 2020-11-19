@@ -1,10 +1,11 @@
 #![warn(rust_2018_idioms)]
 
-use std::{env, io, str};
-use tokio_util::codec::{Decoder, Encoder};
+use futures::sink::SinkExt;
 use futures::stream::StreamExt;
+use std::{env, io, str};
+use tokio_util::codec::{Decoder, Encoder, Framed};
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 
 #[cfg(unix)]
 const DEFAULT_TTY: &str = "/dev/ttyUSB0";
@@ -20,8 +21,9 @@ impl Decoder for LineCodec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let newline = src.as_ref().iter().position(|b| *b == b'\n');
         if let Some(n) = newline {
-            let line = src.split_to(n + 1);
-            return match str::from_utf8(line.as_ref()) {
+            let mut line = src.split_to(n + 1);
+            line.split_off(n); //remove `\n`
+            return match str::from_utf8(line.bytes()) {
                 Ok(s) => Ok(Some(s.to_string())),
                 Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Invalid String")),
             };
@@ -30,11 +32,14 @@ impl Decoder for LineCodec {
     }
 }
 
-impl Encoder for LineCodec {
-    type Item = String;
+impl Encoder<String> for LineCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, _item: Self::Item, _dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: String, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let line = item.as_bytes();
+        dst.reserve(line.len() + 1);
+        dst.put(line);
+        dst.put_u8(b'\n');
         Ok(())
     }
 }
@@ -51,10 +56,12 @@ async fn main() {
     port.set_exclusive(false)
         .expect("Unable to set serial port exclusive to false");
 
-    let mut reader = LineCodec.framed(port);
+    // let mut serialFrame = LineCodec.framed(port);
+    let mut serial_frame = Framed::new(port, LineCodec);
 
-    while let Some(line_result) = reader.next().await {
+    while let Some(line_result) = serial_frame.next().await {
         let line = line_result.expect("Failed to read line");
         println!("{}", line);
+        serial_frame.send(line).await;
     }
 }
