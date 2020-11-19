@@ -23,7 +23,7 @@ impl Decoder for LineCodec {
         if let Some(n) = newline {
             let mut line = src.split_to(n + 1);
             line.split_off(n); //remove `\n`
-            return match str::from_utf8(line.bytes()) {
+            return match str::from_utf8(line.as_ref()) {
                 Ok(s) => Ok(Some(s.to_string())),
                 Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Invalid String")),
             };
